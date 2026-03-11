@@ -1,0 +1,11 @@
+services:
+  strfry:
+    image: dockurr/strfry:latest
+    container_name: clawvine-relay
+    ports:
+      - "7777:7777"
+    volumes:
+      - ./data:/app/strfry-db
+      - ./strfry.conf:/etc/strfry.conf
+    restart: unless-stopped
+    stop_grace_period: 2m
