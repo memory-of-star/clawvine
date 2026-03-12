@@ -8,6 +8,7 @@ import type {
   GossipRequest,
   GossipResponse,
   MatchProposal,
+  MatchApproval,
   ReferralMessage,
   MatchRecord,
   PeerRecord,
@@ -125,6 +126,9 @@ export class GossipEngine {
     // Refresh heartbeat
     await this.client.publishHeartbeat();
 
+    // Send approval notifications for any locally-approved matches
+    await this.sendPendingApprovals();
+
     // Select peers: random + referred
     const selectedPeers = this.selectPeers();
 
@@ -220,6 +224,9 @@ export class GossipEngine {
       case 'match_proposal':
         this.handleMatchProposal(senderPubkey, envelope.payload as MatchProposal);
         break;
+      case 'match_approval':
+        this.handleMatchApproval(senderPubkey);
+        break;
     }
   }
 
@@ -280,6 +287,18 @@ export class GossipEngine {
 
     // Check if similarity exceeds threshold
     if (similarity >= this.config.similarityThreshold) {
+      // Skip if we already have a match with this peer
+      const existingMatch = loadMatches().find((m) => m.peerNpub === peerNpub);
+      if (existingMatch) {
+        // Update similarity if it improved, but don't create duplicate
+        if (similarity > existingMatch.similarity) {
+          existingMatch.similarity = similarity;
+          existingMatch.updatedAt = Date.now();
+          addMatch(existingMatch);
+        }
+        return;
+      }
+
       const matchId = bytesToHex(randomBytes(16));
       const match: MatchRecord = {
         id: matchId,
@@ -332,13 +351,8 @@ export class GossipEngine {
     const peerNpub = getNpub(senderPubkey);
     const existing = loadMatches().find((m) => m.peerNpub === peerNpub);
 
-    if (existing && existing.status === 'approved_local') {
-      // Both sides agree — mutual match!
-      existing.status = 'mutual';
-      existing.updatedAt = Date.now();
-      existing.report += `\nMutual match confirmed! Peer summary: ${proposal.agentSummary}`;
-      addMatch(existing);
-    } else if (!existing) {
+    if (!existing) {
+      // New match from peer
       const match: MatchRecord = {
         id: proposal.matchId,
         peerNpub,
@@ -349,6 +363,72 @@ export class GossipEngine {
         updatedAt: Date.now(),
       };
       addMatch(match);
+      return;
+    }
+
+    // Already have a match with this peer — update with peer's info
+    if (existing.status === 'approved_local') {
+      // We already approved, and peer is proposing → mutual!
+      existing.status = 'mutual';
+      existing.updatedAt = Date.now();
+      existing.report += `\nMutual match confirmed! Peer summary: ${proposal.agentSummary}`;
+      addMatch(existing);
+    } else if (existing.status === 'pending_local') {
+      // Both sides found each other — update report with peer's summary
+      existing.report += `\nPeer also matched! Peer summary: ${proposal.agentSummary}`;
+      existing.updatedAt = Date.now();
+      addMatch(existing);
+    }
+    // If already 'mutual' or 'rejected', ignore
+  }
+
+  /**
+   * Handle incoming match_approval: the peer's human approved the match.
+   */
+  private handleMatchApproval(senderPubkey: string): void {
+    const peerNpub = getNpub(senderPubkey);
+    const existing = loadMatches().find((m) => m.peerNpub === peerNpub);
+    if (!existing) return;
+
+    if (existing.status === 'approved_local') {
+      // Both sides approved → mutual!
+      existing.status = 'mutual';
+      existing.updatedAt = Date.now();
+      existing.report += '\nMutual match confirmed! Both humans approved.';
+      addMatch(existing);
+    } else if (existing.status === 'pending_local') {
+      // Peer approved, but we haven't yet — note it in the report
+      existing.report += '\nPeer has approved this match! Waiting for your approval.';
+      existing.updatedAt = Date.now();
+      addMatch(existing);
+    }
+  }
+
+  /**
+   * Send match_approval notifications for all locally-approved matches
+   * that haven't become mutual yet.
+   */
+  private async sendPendingApprovals(): Promise<void> {
+    const approvedMatches = loadMatches().filter((m) => m.status === 'approved_local');
+
+    for (const match of approvedMatches) {
+      const peerPubkey = npubToPubkey(match.peerNpub);
+      if (!peerPubkey) continue;
+
+      const approval: MatchApproval = { peerNpub: getNpub(this.identity.nostrPublicKey) };
+      const envelope: GossipEnvelope = {
+        protocol: 'clawvine',
+        version: this.config.version,
+        type: 'match_approval',
+        payload: approval,
+        timestamp: Date.now(),
+      };
+
+      try {
+        await this.client.sendEncryptedDM(peerPubkey, envelope);
+      } catch {
+        // peer unreachable, will retry next round
+      }
     }
   }
 

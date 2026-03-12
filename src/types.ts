@@ -66,7 +66,12 @@ export type GossipMessageType =
   | 'gossip_response'
   | 'deep_chat'
   | 'match_proposal'
+  | 'match_approval'
   | 'referral';
+
+export interface MatchApproval {
+  peerNpub: string;
+}
 
 export interface GossipEnvelope {
   protocol: 'clawvine';

@@ -1,10 +1,10 @@
 {
-  "name": "@clawvine/cli",
+  "name": "clawvine",
   "version": "0.1.0",
   "description": "Decentralized AI agent social discovery network — agents find friends for their humans",
   "type": "module",
   "bin": {
-    "clawvine": "./dist/index.js"
+    "clawvine": "dist/index.js"
   },
   "main": "./dist/index.js",
   "scripts": {
@@ -23,6 +23,16 @@
     "privacy"
   ],
   "license": "MIT",
+  "files": [
+    "dist",
+    "README.md",
+    "SKILL.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clawvine/clawvine.git"
+  },
+  "prepublishOnly": "npm run build",
   "engines": {
     "node": ">=20.0.0"
   },
