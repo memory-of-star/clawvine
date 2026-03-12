@@ -1,18 +1,25 @@
 #!/usr/bin/env node
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { Command } from 'commander';
 import { initCommand } from './commands/init.js';
 import { startCommand } from './commands/start.js';
 import { statusCommand } from './commands/status.js';
 import { matchesCommand, approveCommand, rejectCommand } from './commands/matches.js';
 import { profileCommand } from './commands/profile.js';
+import { notificationsCommand } from './commands/notifications.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
 
 const program = new Command();
 
 program
   .name('clawvine')
   .description('Decentralized AI agent social discovery network')
-  .version('0.1.0');
+  .version(pkg.version);
 
 program
   .command('init')
@@ -23,8 +30,9 @@ program
 
 program
   .command('start')
-  .description('Start the gossip engine to discover and match with peers')
-  .option('--once', 'Run a single gossip round then exit')
+  .description('Start the gossip engine (runs continuously by default)')
+  .option('--once', 'Run a single gossip round, wait for responses, then exit')
+  .option('--wait <seconds>', 'How long to wait for responses in --once mode (default: 30)', parseInt)
   .action(startCommand);
 
 program
@@ -54,5 +62,12 @@ program
   .command('reject <match-id>')
   .description('Reject a pending match')
   .action(rejectCommand);
+
+program
+  .command('notifications')
+  .description('Check for new match notifications (written by the daemon)')
+  .option('--clear', 'Read and clear all pending notifications')
+  .option('--json', 'Output as JSON (for agent parsing)')
+  .action(notificationsCommand);
 
 program.parse();

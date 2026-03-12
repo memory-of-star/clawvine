@@ -8,6 +8,7 @@ import {
   type MatchRecord,
   type PeerRecord,
   type GossipRoundStats,
+  type ClawVineNotification,
   DEFAULT_CONFIG,
 } from '../types.js';
 
@@ -18,6 +19,7 @@ const PROFILE_FILE = join(CLAWVINE_DIR, 'profile.json');
 const MATCHES_FILE = join(CLAWVINE_DIR, 'matches.json');
 const PEERS_FILE = join(CLAWVINE_DIR, 'peers.json');
 const STATS_FILE = join(CLAWVINE_DIR, 'stats.json');
+const NOTIFICATIONS_FILE = join(CLAWVINE_DIR, 'notifications.json');
 
 export function getClawVineDir(): string {
   return CLAWVINE_DIR;
@@ -85,9 +87,27 @@ export function saveMatches(matches: MatchRecord[]): void {
 
 export function addMatch(match: MatchRecord): void {
   const matches = loadMatches();
-  const existing = matches.findIndex((m) => m.id === match.id);
-  if (existing >= 0) {
-    matches[existing] = match;
+
+  // Primary dedup: same peer should only have one match record
+  const byPeer = matches.findIndex((m) => m.peerNpub === match.peerNpub);
+  if (byPeer >= 0) {
+    // Keep the higher-status or newer record
+    const old = matches[byPeer];
+    matches[byPeer] = {
+      ...old,
+      ...match,
+      id: old.id, // preserve original id
+      createdAt: old.createdAt, // preserve original creation time
+      similarity: Math.max(old.similarity, match.similarity),
+    };
+    saveMatches(matches);
+    return;
+  }
+
+  // Secondary dedup: same match id
+  const byId = matches.findIndex((m) => m.id === match.id);
+  if (byId >= 0) {
+    matches[byId] = match;
   } else {
     matches.push(match);
   }
@@ -127,4 +147,23 @@ export function appendStats(stats: GossipRoundStats): void {
   // keep last 100 rounds
   if (all.length > 100) all.splice(0, all.length - 100);
   writeJson(STATS_FILE, all);
+}
+
+// ── Notifications ──
+
+export function loadNotifications(): ClawVineNotification[] {
+  return readJson<ClawVineNotification[]>(NOTIFICATIONS_FILE, []);
+}
+
+export function pushNotification(notification: ClawVineNotification): void {
+  const all = loadNotifications();
+  all.push(notification);
+  if (all.length > 200) all.splice(0, all.length - 200);
+  writeJson(NOTIFICATIONS_FILE, all);
+}
+
+export function clearNotifications(): ClawVineNotification[] {
+  const all = loadNotifications();
+  writeJson(NOTIFICATIONS_FILE, []);
+  return all;
 }

@@ -24,9 +24,13 @@ npx -y @clawvine/cli@latest <command> [options]
 | `clawvine init --tags "tag1,tag2,..."` | Initialize with Nostr identity + Paillier HE keypair |
 | `clawvine profile --tags "tag1,tag2,..."` | Update interest profile |
 | `clawvine profile --list` | List available interest categories |
-| `clawvine profile --prompt "chat summary"` | Generate LLM prompt for profile extraction from conversations |
-| `clawvine start` | Start the gossip matching daemon |
-| `clawvine start --once` | Run a single gossip round |
+| `clawvine profile --prompt "chat summary"` | Generate LLM prompt for profile extraction |
+| `clawvine start` | **Start the gossip daemon (runs continuously in background)** |
+| `clawvine start --once` | Run one gossip round, wait 30s for responses, exit |
+| `clawvine start --once --wait 60` | Same but wait 60s for responses |
+| `clawvine notifications` | **Check for new match notifications** |
+| `clawvine notifications --json` | Output notifications as JSON for parsing |
+| `clawvine notifications --clear` | Read and clear all notifications |
 | `clawvine status` | Check network status, peers, matches |
 | `clawvine matches` | List all matches |
 | `clawvine approve <id>` | Approve a pending match (double opt-in) |
@@ -42,11 +46,11 @@ Before any ClawVine operation, run:
 npx -y @clawvine/cli@latest status
 ```
 
-If status reports "not initialized" or similar, proceed to init.
+If status reports "not initialized", proceed to init.
 
 ### 2. Initialize If Needed
 
-If not initialized, run `clawvine init` with tags extracted from conversations with the human. If you have no prior context, use a broad set or ask the human for interests:
+Run `clawvine init` with tags extracted from conversations with the human:
 
 ```bash
 npx -y @clawvine/cli@latest init --tags "rust,photography,startup"
@@ -58,43 +62,79 @@ To see available categories first:
 npx -y @clawvine/cli@latest profile --list
 ```
 
-### 3. Run Gossip Periodically
+### 3. Start the Daemon (Background)
 
-Run a single gossip round periodically (e.g. every 6 hours) to discover and match with peers. Each round also sends approval notifications for any locally-approved matches:
-
-```bash
-npx -y @clawvine/cli@latest start --once
-```
-
-For long-running gossip, use `clawvine start` (daemon mode). **Always run a gossip round after approving matches** — this is how the peer gets notified.
-
-### 4. Check for Matches
-
-After gossip rounds, check for matches:
+Launch the gossip daemon as a background process. It runs continuously — listening for incoming gossip requests, responding to peers, and discovering matches even when the human isn't actively chatting:
 
 ```bash
-npx -y @clawvine/cli@latest matches
+npx -y @clawvine/cli@latest start &
 ```
 
-Notify the human about any pending matches. Present match IDs and brief context (e.g. shared interests).
+The daemon:
+- Listens for heartbeats, gossip requests/responses, match proposals, and approvals at all times
+- Runs gossip rounds at regular intervals (default: every 6 hours)
+- Writes match notifications to `~/.clawvine/notifications.json` in real-time
+- Peers do NOT need to be online simultaneously — the daemon receives messages whenever it is running
+
+**If a background daemon is not feasible**, use `--once` mode periodically (e.g. every few hours):
+
+```bash
+npx -y @clawvine/cli@latest start --once --wait 60
+```
+
+### 4. Poll for Notifications
+
+**This is how the agent discovers matches.** Periodically check for new notifications:
+
+```bash
+npx -y @clawvine/cli@latest notifications --json
+```
+
+The JSON output is an array of notification objects:
+
+```json
+[
+  {
+    "type": "new_match",
+    "matchId": "abc123...",
+    "peerNpub": "npub1...",
+    "similarity": 0.82,
+    "summary": "Cosine similarity: 0.8200. Matched via gossip round #3.",
+    "timestamp": 1710000000000
+  }
+]
+```
+
+Notification types:
+- `new_match` — a new potential match was found
+- `mutual_match` — both humans approved, connection confirmed!
+- `peer_approved` — the peer's human approved, waiting for your human
+
+When there are notifications, present them to the human. Then clear:
+
+```bash
+npx -y @clawvine/cli@latest notifications --clear
+```
+
+**Recommended polling interval**: every 1-2 hours, or whenever the human starts a conversation.
 
 ### 5. Approve / Reject Only With Human Consent
 
 **Never approve or reject matches without explicit human approval.**
 
-- **Approve**: `npx -y @clawvine/cli@latest approve <match-id>`
-- **Reject**: `npx -y @clawvine/cli@latest reject <match-id>`
+```bash
+npx -y @clawvine/cli@latest approve <match-id>
+npx -y @clawvine/cli@latest reject <match-id>
+```
 
-Always ask: "Would you like to approve match X?" or "Should I reject match Y?" before running these commands.
+Always ask: "I found a potential match with someone who shares your interest in X. Would you like to approve?" before running these commands.
 
-**Important**: After approving a match, run a gossip round so the peer is notified:
+If the daemon is running, approvals are automatically propagated to the peer in the next gossip round. If using `--once` mode, run it after approving:
 
 ```bash
 npx -y @clawvine/cli@latest approve <match-id>
 npx -y @clawvine/cli@latest start --once
 ```
-
-A match becomes **mutual** only when both humans approve and both agents have run a gossip round to exchange approvals.
 
 ### 6. Update Profile As You Learn
 
@@ -104,31 +144,30 @@ Update the human's profile as you learn more from conversations:
 npx -y @clawvine/cli@latest profile --tags "new_tag1,new_tag2"
 ```
 
-To generate an LLM prompt for extracting profile from a chat summary:
+## Privacy Model
 
-```bash
-npx -y @clawvine/cli@latest profile --prompt "User discussed: hiking, indie games, and cooking"
-```
-
-Then parse the LLM's JSON output and update the profile accordingly.
-
-## Privacy Model (Technical Overview)
-
-- **Paillier Homomorphic Encryption**: Interest vectors are encrypted before leaving the machine. Peers compute similarity (dot product) on encrypted data; only the sender decrypts the final score. The receiver never sees the sender's raw vector.
-- **Nostr Encrypted DMs**: Gossip envelopes (encrypted vectors, public keys) are sent via Nostr NIP-04 encrypted direct messages. Only the intended recipient can decrypt.
-- **Vectors Never Leave in Plaintext**: Raw interest vectors stay local. Only encrypted vectors and public keys are transmitted. Similarity computation happens in ciphertext space.
+- **Paillier Homomorphic Encryption**: Interest vectors are encrypted before leaving the machine. Similarity is computed on encrypted data; only the sender decrypts the score.
+- **Nostr Encrypted DMs**: Gossip envelopes are sent via NIP-04 encrypted direct messages. Only the intended recipient can decrypt.
+- **Vectors Never Leave in Plaintext**: Raw interest vectors stay local. Only encrypted vectors and public keys are transmitted.
 
 ## Quick Reference
 
 ```
 # First-time setup
-npx -y @clawvine/cli@latest status
 npx -y @clawvine/cli@latest init --tags "tag1,tag2"
 
-# Ongoing
-npx -y @clawvine/cli@latest start --once          # gossip + send approvals
-npx -y @clawvine/cli@latest matches                # check for matches
-npx -y @clawvine/cli@latest approve <id>           # only after human says yes
-npx -y @clawvine/cli@latest start --once           # notify peer of approval
-npx -y @clawvine/cli@latest profile --tags "..."   # when interests change
+# Start daemon (background, run once)
+npx -y @clawvine/cli@latest start &
+
+# Agent polls for notifications (regularly)
+npx -y @clawvine/cli@latest notifications --json
+
+# Present to human, then approve/reject
+npx -y @clawvine/cli@latest approve <id>
+
+# Clear after presenting
+npx -y @clawvine/cli@latest notifications --clear
+
+# Update profile when interests change
+npx -y @clawvine/cli@latest profile --tags "..."
 ```

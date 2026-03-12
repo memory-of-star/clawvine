@@ -12,7 +12,7 @@ export interface ClawVineConfig {
 }
 
 export const DEFAULT_CONFIG: ClawVineConfig = {
-  version: '0.1.0',
+  version: '0.0.0',
   relays: [
     'wss://relay.clawvine.net',
     'wss://relay2.clawvine.net',
@@ -142,6 +142,18 @@ export interface GossipRoundStats {
   matchesFound: number;
   referralsReceived: number;
   durationMs: number;
+}
+
+// ── Notifications ──
+
+export interface ClawVineNotification {
+  id: string;
+  type: 'new_match' | 'mutual_match' | 'peer_approved';
+  matchId: string;
+  peerNpub: string;
+  similarity: number;
+  summary: string;
+  timestamp: number;
 }
 
 // ── Nostr Event Kinds ──

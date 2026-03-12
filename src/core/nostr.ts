@@ -19,6 +19,7 @@ interface Subscription {
 export class NostrClient {
   private sockets: Map<string, WebSocket> = new Map();
   private subscriptions: Map<string, Subscription> = new Map();
+  private seenEvents: Set<string> = new Set();
   private subCounter = 0;
   private secretKey: Uint8Array;
   private publicKey: string;
@@ -79,6 +80,16 @@ export class NostrClient {
     if (msg[0] === 'EVENT' && msg[1] && msg[2]) {
       const subId = msg[1] as string;
       const event = msg[2] as VerifiedEvent;
+
+      // Deduplicate: same event may arrive from multiple relays
+      if (this.seenEvents.has(event.id)) return;
+      this.seenEvents.add(event.id);
+      // Cap memory: keep last 5000 event IDs
+      if (this.seenEvents.size > 5000) {
+        const first = this.seenEvents.values().next().value!;
+        this.seenEvents.delete(first);
+      }
+
       const sub = this.subscriptions.get(subId);
       if (sub) sub.callback(event);
     }
@@ -126,7 +137,7 @@ export class NostrClient {
       kind: CLAWVINE_HEARTBEAT_KIND,
       content: JSON.stringify({
         protocol: 'clawvine',
-        version: '0.1.0',
+        version: '0.0.0',
         capabilities: ['paillier-2048'],
       }),
       tags: [['d', 'clawvine-heartbeat']],
@@ -153,8 +164,9 @@ export class NostrClient {
   }
 
   subscribeToEncryptedDMs(callback: (senderPubkey: string, envelope: GossipEnvelope) => void): string {
+    const since = Math.floor(Date.now() / 1000) - 60; // only events from ~1 min ago onward
     return this.subscribe(
-      [{ kinds: [CLAWVINE_DM_KIND], '#p': [this.publicKey] }],
+      [{ kinds: [CLAWVINE_DM_KIND], '#p': [this.publicKey], since }],
       async (event) => {
         try {
           const plaintext = await nip04.decrypt(this.secretKey, event.pubkey, event.content);

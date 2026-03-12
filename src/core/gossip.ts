@@ -13,6 +13,7 @@ import type {
   MatchRecord,
   PeerRecord,
   GossipRoundStats,
+  ClawVineNotification,
 } from '../types.js';
 import { NostrClient } from './nostr.js';
 import {
@@ -28,12 +29,15 @@ import {
   addMatch,
   appendStats,
   loadMatches,
+  pushNotification,
 } from './config.js';
 
 interface PendingGossip {
   peerPubkey: string;
   sentAt: number;
 }
+
+export type MatchNotifyCallback = (match: MatchRecord, event: 'new' | 'mutual') => void;
 
 export class GossipEngine {
   private client: NostrClient;
@@ -44,6 +48,8 @@ export class GossipEngine {
   private pendingRequests: Map<string, PendingGossip> = new Map();
   private roundNumber = 0;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
+  private onMatchNotify: MatchNotifyCallback | null = null;
+  private handlersReady = false;
 
   constructor(
     client: NostrClient,
@@ -61,8 +67,37 @@ export class GossipEngine {
     }
   }
 
-  async start(): Promise<void> {
+  onMatch(callback: MatchNotifyCallback): void {
+    this.onMatchNotify = callback;
+  }
+
+  private notifyMatch(match: MatchRecord, event: 'new' | 'mutual'): void {
+    const notification: ClawVineNotification = {
+      id: bytesToHex(randomBytes(8)),
+      type: event === 'new' ? 'new_match' : 'mutual_match',
+      matchId: match.id,
+      peerNpub: match.peerNpub,
+      similarity: match.similarity,
+      summary: match.report.split('\n')[0],
+      timestamp: Date.now(),
+    };
+    pushNotification(notification);
+    if (this.onMatchNotify) this.onMatchNotify(match, event);
+  }
+
+  /**
+   * Set up message handlers so this agent can RECEIVE gossip requests,
+   * responses, proposals, and approvals. Must be called before any
+   * round for bidirectional communication.
+   */
+  listen(): void {
+    if (this.handlersReady) return;
     this.setupMessageHandlers();
+    this.handlersReady = true;
+  }
+
+  async start(): Promise<void> {
+    this.listen();
     await this.client.publishHeartbeat();
 
     // Run first round immediately
@@ -310,6 +345,7 @@ export class GossipEngine {
         updatedAt: Date.now(),
       };
       addMatch(match);
+      this.notifyMatch(match, 'new');
 
       // Send match proposal to the peer
       const proposal: MatchProposal = {
@@ -363,44 +399,48 @@ export class GossipEngine {
         updatedAt: Date.now(),
       };
       addMatch(match);
+      this.notifyMatch(match, 'new');
       return;
     }
 
     // Already have a match with this peer — update with peer's info
     if (existing.status === 'approved_local') {
-      // We already approved, and peer is proposing → mutual!
       existing.status = 'mutual';
       existing.updatedAt = Date.now();
       existing.report += `\nMutual match confirmed! Peer summary: ${proposal.agentSummary}`;
       addMatch(existing);
+      this.notifyMatch(existing, 'mutual');
     } else if (existing.status === 'pending_local') {
-      // Both sides found each other — update report with peer's summary
       existing.report += `\nPeer also matched! Peer summary: ${proposal.agentSummary}`;
       existing.updatedAt = Date.now();
       addMatch(existing);
     }
-    // If already 'mutual' or 'rejected', ignore
   }
 
-  /**
-   * Handle incoming match_approval: the peer's human approved the match.
-   */
   private handleMatchApproval(senderPubkey: string): void {
     const peerNpub = getNpub(senderPubkey);
     const existing = loadMatches().find((m) => m.peerNpub === peerNpub);
     if (!existing) return;
 
     if (existing.status === 'approved_local') {
-      // Both sides approved → mutual!
       existing.status = 'mutual';
       existing.updatedAt = Date.now();
       existing.report += '\nMutual match confirmed! Both humans approved.';
       addMatch(existing);
+      this.notifyMatch(existing, 'mutual');
     } else if (existing.status === 'pending_local') {
-      // Peer approved, but we haven't yet — note it in the report
       existing.report += '\nPeer has approved this match! Waiting for your approval.';
       existing.updatedAt = Date.now();
       addMatch(existing);
+      pushNotification({
+        id: bytesToHex(randomBytes(8)),
+        type: 'peer_approved',
+        matchId: existing.id,
+        peerNpub: existing.peerNpub,
+        similarity: existing.similarity,
+        summary: 'Peer approved — waiting for your approval.',
+        timestamp: Date.now(),
+      });
     }
   }
 
