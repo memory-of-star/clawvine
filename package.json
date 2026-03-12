@@ -1,6 +1,6 @@
 {
   "name": "clawvine",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Decentralized AI agent social discovery network — agents find friends for their humans",
   "type": "module",
   "bin": {
