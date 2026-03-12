@@ -5,10 +5,13 @@ import {
   type ClawVineConfig,
   type StoredIdentity,
   type InterestProfile,
+  type AgentContext,
+  type AgentMemoryEntry,
   type MatchRecord,
   type PeerRecord,
   type GossipRoundStats,
   type ClawVineNotification,
+  type ChatMessage,
   DEFAULT_CONFIG,
 } from '../types.js';
 
@@ -20,6 +23,8 @@ const MATCHES_FILE = join(CLAWVINE_DIR, 'matches.json');
 const PEERS_FILE = join(CLAWVINE_DIR, 'peers.json');
 const STATS_FILE = join(CLAWVINE_DIR, 'stats.json');
 const NOTIFICATIONS_FILE = join(CLAWVINE_DIR, 'notifications.json');
+const CHAT_FILE = join(CLAWVINE_DIR, 'chat.json');
+const AGENT_CONTEXT_FILE = join(CLAWVINE_DIR, 'agent-context.json');
 
 export function getClawVineDir(): string {
   return CLAWVINE_DIR;
@@ -166,4 +171,39 @@ export function clearNotifications(): ClawVineNotification[] {
   const all = loadNotifications();
   writeJson(NOTIFICATIONS_FILE, []);
   return all;
+}
+
+// ── Chat ──
+
+export function loadChat(): ChatMessage[] {
+  return readJson<ChatMessage[]>(CHAT_FILE, []);
+}
+
+export function appendChat(msg: ChatMessage): void {
+  const all = loadChat();
+  all.push(msg);
+  if (all.length > 1000) all.splice(0, all.length - 1000);
+  writeJson(CHAT_FILE, all);
+}
+
+export function loadChatWith(peerNpub: string): ChatMessage[] {
+  return loadChat().filter((m) => m.peerNpub === peerNpub);
+}
+
+// ── Agent Context (PRIVATE — never transmitted over the network) ──
+
+export function loadAgentContext(): AgentContext {
+  return readJson<AgentContext>(AGENT_CONTEXT_FILE, { memories: [], updatedAt: 0 });
+}
+
+export function addAgentMemory(entry: AgentMemoryEntry): void {
+  const ctx = loadAgentContext();
+  ctx.memories.push(entry);
+  if (ctx.memories.length > 500) ctx.memories.splice(0, ctx.memories.length - 500);
+  ctx.updatedAt = Date.now();
+  writeJson(AGENT_CONTEXT_FILE, ctx);
+}
+
+export function clearAgentContext(): void {
+  writeJson(AGENT_CONTEXT_FILE, { memories: [], updatedAt: 0 });
 }

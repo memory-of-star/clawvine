@@ -52,11 +52,38 @@ export interface StoredIdentity {
   hePrivateKey: SerializedPaillierPrivateKey;
 }
 
+/**
+ * Human-authored profile fields. Only these are shared with mutual matches.
+ * The `vector` is derived from BOTH human profile AND agent context, but
+ * only ever transmitted in Paillier-encrypted form — never plaintext.
+ */
 export interface InterestProfile {
   vector: number[];
   tags: string[];
   summary: string;
+  intro: string;
   updatedAt: number;
+}
+
+/**
+ * PRIVATE agent context — observations from chat history, files, etc.
+ * Used ONLY to enrich the matching vector locally.
+ *
+ * ╔══════════════════════════════════════════════════════════════════╗
+ * ║  NEVER include any field from AgentContext in a network message ║
+ * ║  NEVER include in ProfileExchange, MatchProposal, or chat      ║
+ * ║  NEVER expose to the human's match counterpart in any form     ║
+ * ╚══════════════════════════════════════════════════════════════════╝
+ */
+export interface AgentContext {
+  memories: AgentMemoryEntry[];
+  updatedAt: number;
+}
+
+export interface AgentMemoryEntry {
+  source: string;
+  content: string;
+  addedAt: number;
 }
 
 // ── Gossip Protocol Messages ──
@@ -67,7 +94,9 @@ export type GossipMessageType =
   | 'deep_chat'
   | 'match_proposal'
   | 'match_approval'
-  | 'referral';
+  | 'profile_exchange'
+  | 'referral'
+  | 'agent_chat';
 
 export interface MatchApproval {
   peerNpub: string;
@@ -101,7 +130,21 @@ export interface MatchProposal {
   matchId: string;
   similarityScore: number;
   report: string;
+  /** Must ONLY contain the human-authored summary, never agent memory content */
   agentSummary: string;
+}
+
+export interface ProfileExchange {
+  tags: string[];
+  summary: string;
+  intro: string;
+}
+
+export interface PeerProfile {
+  tags: string[];
+  summary: string;
+  intro: string;
+  receivedAt: number;
 }
 
 export interface ReferralMessage {
@@ -122,6 +165,7 @@ export interface MatchRecord {
   similarity: number;
   status: 'pending_local' | 'approved_local' | 'rejected' | 'mutual' | 'expired';
   report: string;
+  peerProfile?: PeerProfile;
   createdAt: number;
   updatedAt: number;
 }
@@ -144,11 +188,25 @@ export interface GossipRoundStats {
   durationMs: number;
 }
 
+export interface AgentChatMessage {
+  text: string;
+}
+
+// ── Chat Inbox ──
+
+export interface ChatMessage {
+  id: string;
+  peerNpub: string;
+  direction: 'in' | 'out';
+  text: string;
+  timestamp: number;
+}
+
 // ── Notifications ──
 
 export interface ClawVineNotification {
   id: string;
-  type: 'new_match' | 'mutual_match' | 'peer_approved';
+  type: 'new_match' | 'mutual_match' | 'peer_approved' | 'new_message';
   matchId: string;
   peerNpub: string;
   similarity: number;

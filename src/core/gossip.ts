@@ -9,6 +9,8 @@ import type {
   GossipResponse,
   MatchProposal,
   MatchApproval,
+  ProfileExchange,
+  AgentChatMessage,
   ReferralMessage,
   MatchRecord,
   PeerRecord,
@@ -30,6 +32,7 @@ import {
   appendStats,
   loadMatches,
   pushNotification,
+  appendChat,
 } from './config.js';
 
 interface PendingGossip {
@@ -164,6 +167,9 @@ export class GossipEngine {
     // Send approval notifications for any locally-approved matches
     await this.sendPendingApprovals();
 
+    // Resend profile exchange for mutual matches missing peer profile
+    await this.sendPendingProfileExchanges();
+
     // Select peers: random + referred
     const selectedPeers = this.selectPeers();
 
@@ -261,6 +267,12 @@ export class GossipEngine {
         break;
       case 'match_approval':
         this.handleMatchApproval(senderPubkey);
+        break;
+      case 'agent_chat':
+        this.handleAgentChat(senderPubkey, envelope.payload as AgentChatMessage);
+        break;
+      case 'profile_exchange':
+        this.handleProfileExchange(senderPubkey, envelope.payload as ProfileExchange);
         break;
     }
   }
@@ -410,6 +422,7 @@ export class GossipEngine {
       existing.report += `\nMutual match confirmed! Peer summary: ${proposal.agentSummary}`;
       addMatch(existing);
       this.notifyMatch(existing, 'mutual');
+      this.sendProfileExchange(senderPubkey).catch(() => {});
     } else if (existing.status === 'pending_local') {
       existing.report += `\nPeer also matched! Peer summary: ${proposal.agentSummary}`;
       existing.updatedAt = Date.now();
@@ -428,6 +441,7 @@ export class GossipEngine {
       existing.report += '\nMutual match confirmed! Both humans approved.';
       addMatch(existing);
       this.notifyMatch(existing, 'mutual');
+      this.sendProfileExchange(senderPubkey).catch(() => {});
     } else if (existing.status === 'pending_local') {
       existing.report += '\nPeer has approved this match! Waiting for your approval.';
       existing.updatedAt = Date.now();
@@ -441,6 +455,66 @@ export class GossipEngine {
         summary: 'Peer approved — waiting for your approval.',
         timestamp: Date.now(),
       });
+    }
+  }
+
+  private async sendProfileExchange(peerPubkey: string): Promise<void> {
+    const payload: ProfileExchange = {
+      tags: this.profile.tags,
+      summary: this.profile.summary,
+      intro: this.profile.intro || '',
+    };
+    const envelope: GossipEnvelope = {
+      protocol: 'clawvine',
+      version: this.config.version,
+      type: 'profile_exchange',
+      payload,
+      timestamp: Date.now(),
+    };
+    await this.client.sendEncryptedDM(peerPubkey, envelope);
+  }
+
+  private handleProfileExchange(senderPubkey: string, exchange: ProfileExchange): void {
+    const peerNpub = getNpub(senderPubkey);
+    const existing = loadMatches().find((m) => m.peerNpub === peerNpub);
+    if (!existing) return;
+    // STRICT: only accept profile exchange from mutual matches
+    if (existing.status !== 'mutual') return;
+
+    existing.peerProfile = {
+      tags: exchange.tags,
+      summary: exchange.summary,
+      intro: exchange.intro,
+      receivedAt: Date.now(),
+    };
+    existing.updatedAt = Date.now();
+    addMatch(existing);
+
+    pushNotification({
+      id: bytesToHex(randomBytes(8)),
+      type: 'mutual_match',
+      matchId: existing.id,
+      peerNpub,
+      similarity: existing.similarity,
+      summary: `Profile received! Interests: ${exchange.tags.slice(0, 5).join(', ')}. ${exchange.intro || exchange.summary}`,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Also resend profile exchange for mutual matches that don't have a peer profile yet
+   * (the peer may not have received ours).
+   */
+  private async sendPendingProfileExchanges(): Promise<void> {
+    const mutualMatches = loadMatches().filter(
+      (m) => m.status === 'mutual' && !m.peerProfile,
+    );
+    for (const match of mutualMatches) {
+      const peerPubkey = npubToPubkey(match.peerNpub);
+      if (!peerPubkey) continue;
+      try {
+        await this.sendProfileExchange(peerPubkey);
+      } catch { /* retry next round */ }
     }
   }
 
@@ -470,6 +544,55 @@ export class GossipEngine {
         // peer unreachable, will retry next round
       }
     }
+  }
+
+  private handleAgentChat(senderPubkey: string, msg: AgentChatMessage): void {
+    const peerNpub = getNpub(senderPubkey);
+    const match = loadMatches().find((m) => m.peerNpub === peerNpub);
+    // STRICT: only relay messages from mutual matches to the human
+    if (!match || match.status !== 'mutual') return;
+
+    appendChat({
+      id: bytesToHex(randomBytes(8)),
+      peerNpub,
+      direction: 'in',
+      text: msg.text,
+      timestamp: Date.now(),
+    });
+
+    pushNotification({
+      id: bytesToHex(randomBytes(8)),
+      type: 'new_message',
+      matchId: match.id,
+      peerNpub,
+      similarity: match.similarity,
+      summary: msg.text.length > 80 ? msg.text.slice(0, 80) + '...' : msg.text,
+      timestamp: Date.now(),
+    });
+  }
+
+  async sendChat(peerNpub: string, text: string): Promise<void> {
+    const peerPubkey = npubToPubkey(peerNpub);
+    if (!peerPubkey) throw new Error('Invalid peer npub');
+
+    const payload: AgentChatMessage = { text };
+    const envelope: GossipEnvelope = {
+      protocol: 'clawvine',
+      version: this.config.version,
+      type: 'agent_chat',
+      payload,
+      timestamp: Date.now(),
+    };
+
+    await this.client.sendEncryptedDM(peerPubkey, envelope);
+
+    appendChat({
+      id: bytesToHex(randomBytes(8)),
+      peerNpub,
+      direction: 'out',
+      text,
+      timestamp: Date.now(),
+    });
   }
 
   private generateReferrals(forPubkey: string): string[] {

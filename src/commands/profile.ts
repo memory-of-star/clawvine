@@ -1,9 +1,10 @@
 import chalk from 'chalk';
-import { isInitialized } from '../core/config.js';
+import { isInitialized, addAgentMemory, loadAgentContext } from '../core/config.js';
 import {
   getProfile,
   updateProfile,
   buildProfileFromTags,
+  rebuildVector,
   INTEREST_CATEGORIES,
   generateProfileExtractionPrompt,
 } from '../core/profile.js';
@@ -12,13 +13,16 @@ export function profileCommand(options: {
   tags?: string;
   list?: boolean;
   prompt?: string;
+  intro?: string;
+  memory?: string;
+  memorySource?: string;
+  rebuildVector?: boolean;
 }): void {
   if (!isInitialized()) {
     console.log(chalk.red('ClawVine is not initialized. Run: clawvine init'));
     return;
   }
 
-  // List all available interest categories
   if (options.list) {
     console.log(chalk.bold('\n🌿 Available Interest Categories\n'));
     const groups: Record<string, string[]> = {
@@ -38,7 +42,6 @@ export function profileCommand(options: {
     return;
   }
 
-  // Generate LLM prompt for profile extraction
   if (options.prompt) {
     const prompt = generateProfileExtractionPrompt(options.prompt);
     console.log(chalk.bold('\n🌿 LLM Profile Extraction Prompt\n'));
@@ -50,7 +53,44 @@ export function profileCommand(options: {
     return;
   }
 
-  // Update profile from tags
+  if (options.intro) {
+    const existing = getProfile();
+    if (!existing) {
+      console.log(chalk.red('Set your interest tags first: clawvine profile --tags "..."'));
+      return;
+    }
+    existing.intro = options.intro;
+    existing.updatedAt = Date.now();
+    updateProfile(existing);
+    console.log(chalk.green(`\n✓ Self-introduction updated`));
+    console.log(`  "${options.intro}"`);
+    console.log(chalk.dim('  This will be shared with mutual matches only.'));
+    return;
+  }
+
+  // Agent submits private memory — stored locally, NEVER transmitted
+  if (options.memory) {
+    const source = options.memorySource || 'agent-observation';
+    addAgentMemory({
+      source,
+      content: options.memory,
+      addedAt: Date.now(),
+    });
+    rebuildVector();
+    const ctx = loadAgentContext();
+    console.log(chalk.green(`\n✓ Agent memory added (${ctx.memories.length} total entries)`));
+    console.log(chalk.dim('  This data is stored locally and NEVER shared with anyone.'));
+    console.log(chalk.dim('  It only improves matching accuracy via the encrypted vector.'));
+    return;
+  }
+
+  // Rebuild vector from tags + agent context
+  if (options.rebuildVector) {
+    rebuildVector();
+    console.log(chalk.green('\n✓ Matching vector rebuilt from tags + agent context'));
+    return;
+  }
+
   if (options.tags) {
     const tags = options.tags.split(',').map((t) => t.trim());
     const invalid = tags.filter((t) => !INTEREST_CATEGORIES.includes(t));
@@ -66,6 +106,7 @@ export function profileCommand(options: {
 
     const profile = buildProfileFromTags(validTags);
     updateProfile(profile);
+    rebuildVector();
     console.log(chalk.green(`\n✓ Profile updated with ${validTags.length} interest tags`));
     console.log(`  Tags: ${validTags.join(', ')}`);
     return;
@@ -83,7 +124,17 @@ export function profileCommand(options: {
   console.log(chalk.bold('\n🌿 Your Interest Profile\n'));
   console.log(`  Tags: ${chalk.cyan(profile.tags.join(', '))}`);
   console.log(`  Summary: ${profile.summary}`);
+  if (profile.intro) {
+    console.log(`  Intro: ${chalk.green(profile.intro)}`);
+  } else {
+    console.log(chalk.dim(`  Intro: (not set — use --intro "..." to add a self-introduction for mutual matches)`));
+  }
   console.log(`  Updated: ${new Date(profile.updatedAt).toLocaleString()}`);
+
+  const ctx = loadAgentContext();
+  if (ctx.memories.length > 0) {
+    console.log(chalk.dim(`  Agent context: ${ctx.memories.length} memory entries (private, never shared)`));
+  }
 
   const active = profile.vector
     .map((v, i) => ({ category: INTEREST_CATEGORIES[i] ?? `dim_${i}`, weight: v }))

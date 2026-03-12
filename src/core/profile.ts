@@ -1,5 +1,5 @@
 import type { InterestProfile } from '../types.js';
-import { loadProfile, saveProfile, loadConfig } from './config.js';
+import { loadProfile, saveProfile, loadConfig, loadAgentContext } from './config.js';
 
 /**
  * Predefined interest categories — each maps to one dimension in the interest vector.
@@ -86,6 +86,7 @@ export function parseProfileResponse(llmResponse: string): InterestProfile | nul
       return null;
     }
 
+    const existing = loadProfile();
     return {
       vector: parsed.vector.map((v: unknown) => {
         const n = Number(v);
@@ -93,6 +94,7 @@ export function parseProfileResponse(llmResponse: string): InterestProfile | nul
       }),
       tags: Array.isArray(parsed.tags) ? parsed.tags : [],
       summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+      intro: existing?.intro ?? '',
       updatedAt: Date.now(),
     };
   } catch {
@@ -114,10 +116,12 @@ export function buildProfileFromTags(tags: string[]): InterestProfile {
     }
   }
 
+  const existing = loadProfile();
   return {
     vector,
     tags,
     summary: `Interested in: ${tags.join(', ')}`,
+    intro: existing?.intro ?? '',
     updatedAt: Date.now(),
   };
 }
@@ -128,4 +132,103 @@ export function getProfile(): InterestProfile | null {
 
 export function updateProfile(profile: InterestProfile): void {
   saveProfile(profile);
+}
+
+/**
+ * Keyword associations for each interest category.
+ * Used to detect interests from agent memory text without an LLM.
+ */
+const CATEGORY_KEYWORDS: Record<string, string[]> = {
+  'web-development': ['react', 'vue', 'nextjs', 'html', 'css', 'javascript', 'typescript', 'frontend', 'backend', 'web'],
+  'mobile-development': ['ios', 'android', 'swift', 'kotlin', 'flutter', 'react native', 'mobile app'],
+  'systems-programming': ['rust', 'c++', 'systems', 'kernel', 'operating system', 'low-level', 'memory'],
+  'machine-learning': ['ml', 'deep learning', 'neural', 'tensorflow', 'pytorch', 'model training', 'llm', 'gpt', 'transformer'],
+  'data-science': ['pandas', 'data analysis', 'statistics', 'visualization', 'jupyter', 'dataset'],
+  'devops': ['docker', 'kubernetes', 'ci/cd', 'terraform', 'ansible', 'deployment', 'infrastructure'],
+  'cybersecurity': ['security', 'encryption', 'vulnerability', 'penetration', 'firewall', 'hacking'],
+  'blockchain': ['crypto', 'ethereum', 'solidity', 'smart contract', 'defi', 'web3', 'bitcoin', 'nft'],
+  'game-development': ['unity', 'unreal', 'game engine', 'godot', 'game design', 'gamedev'],
+  'open-source': ['open source', 'github', 'contribute', 'oss', 'maintainer', 'pull request'],
+  'photography': ['photo', 'camera', 'lens', 'portrait', 'landscape', 'lightroom'],
+  'music-production': ['music', 'ableton', 'synthesizer', 'beats', 'mixing', 'audio'],
+  'writing': ['writing', 'blog', 'novel', 'essay', 'fiction', 'poetry', 'author'],
+  'startup': ['startup', 'founder', 'mvp', 'pitch', 'seed', 'bootstrap'],
+  'entrepreneurship': ['entrepreneur', 'business idea', 'side project', 'launch'],
+  'investing': ['invest', 'stock', 'portfolio', 'dividend', 'trading'],
+  'fitness': ['gym', 'workout', 'exercise', 'running', 'lifting', 'training'],
+  'cooking': ['recipe', 'cooking', 'baking', 'cuisine', 'food'],
+  'travel': ['travel', 'trip', 'backpack', 'destination', 'flight', 'hostel'],
+  'hiking': ['hiking', 'trail', 'mountain', 'camping', 'outdoor'],
+  'video-games': ['gaming', 'steam', 'playstation', 'xbox', 'nintendo', 'rpg', 'fps'],
+  'reading': ['book', 'reading', 'novel', 'kindle', 'library', 'literature'],
+  'coffee': ['coffee', 'espresso', 'latte', 'barista', 'cafe'],
+  'tea': ['tea', 'matcha', 'oolong', 'brewing'],
+  'meditation': ['meditation', 'mindfulness', 'zen', 'breathing'],
+  'yoga': ['yoga', 'asana', 'flexibility', 'vinyasa'],
+  'pets': ['dog', 'cat', 'pet', 'puppy', 'kitten'],
+};
+
+/**
+ * Rebuild the matching vector from human tags + agent context.
+ * Human tags contribute weight 1.0 per tag.
+ * Agent memory contributes up to 0.5 via keyword matching (softer signal).
+ * The resulting vector is used ONLY for encrypted matching — never shared in plaintext.
+ */
+export function rebuildVector(): void {
+  const profile = loadProfile();
+  if (!profile) return;
+
+  const config = loadConfig();
+  const vector = new Array<number>(config.profileDimensions).fill(0);
+
+  // Layer 1: Human-authored tags (weight 1.0)
+  for (const tag of profile.tags) {
+    const idx = INTEREST_CATEGORIES.indexOf(tag);
+    if (idx >= 0 && idx < vector.length) {
+      vector[idx] = 1.0;
+    }
+  }
+
+  // Layer 2: Agent context keyword matching (weight up to 0.5)
+  const ctx = loadAgentContext();
+  if (ctx.memories.length > 0) {
+    const allText = ctx.memories.map((m) => m.content).join(' ').toLowerCase();
+    for (let i = 0; i < INTEREST_CATEGORIES.length && i < vector.length; i++) {
+      if (vector[i] >= 1.0) continue; // human tag already maxed this dimension
+      const cat = INTEREST_CATEGORIES[i];
+      const keywords = CATEGORY_KEYWORDS[cat];
+      if (!keywords) continue;
+      const hits = keywords.filter((kw) => allText.includes(kw)).length;
+      if (hits > 0) {
+        const contextWeight = Math.min(0.5, hits * 0.15);
+        vector[i] = Math.min(1.0, vector[i] + contextWeight);
+      }
+    }
+  }
+
+  profile.vector = vector;
+  profile.updatedAt = Date.now();
+  saveProfile(profile);
+}
+
+/**
+ * Generate an LLM prompt for the agent to analyze its memory and produce
+ * a context vector. The agent submits the response via `clawvine profile --agent-vector`.
+ * This allows richer extraction than keyword matching.
+ */
+export function generateAgentContextPrompt(): string {
+  const categories = INTEREST_CATEGORIES.map((c, i) => `${i}: ${c}`).join('\n');
+
+  return `You are analyzing your observations about the human you assist to enrich their matching profile.
+Based on your memory (conversations, files you've seen, topics discussed), rate each interest category
+from 0.0 (no evidence) to 0.5 (strong evidence from your observations).
+
+IMPORTANT: Use at most 0.5 — the human's explicit tags are weighted separately at up to 1.0.
+Only rate categories where you have clear evidence. Default to 0.0 otherwise.
+
+Categories:
+${categories}
+
+Respond with ONLY a JSON array of 128 float values between 0.0 and 0.5:
+[0.0, 0.3, 0.0, 0.5, ...]`;
 }

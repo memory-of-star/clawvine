@@ -77,6 +77,19 @@ function printMatch(m: MatchRecord): void {
   console.log(`    Similarity: ${(m.similarity * 100).toFixed(1)}%`);
   console.log(`    ${m.report.split('\n')[0]}`);
   console.log(`    Time: ${new Date(m.createdAt).toLocaleString()}`);
+
+  if (m.peerProfile) {
+    console.log(chalk.cyan(`    ── Peer Profile ──`));
+    console.log(`    Interests: ${m.peerProfile.tags.join(', ')}`);
+    if (m.peerProfile.summary) {
+      console.log(`    Summary:   ${m.peerProfile.summary}`);
+    }
+    if (m.peerProfile.intro) {
+      console.log(`    Intro:     ${m.peerProfile.intro}`);
+    }
+  } else if (m.status === 'mutual') {
+    console.log(chalk.dim(`    (Waiting for peer to share their profile...)`));
+  }
 }
 
 export function approveCommand(matchId: string): void {
