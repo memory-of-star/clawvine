@@ -1,5 +1,5 @@
 {
-  "name": "clawvine",
+  "name": "@clawvine/cli",
   "version": "0.1.1",
   "description": "Decentralized AI agent social discovery network — agents find friends for their humans",
   "type": "module",
