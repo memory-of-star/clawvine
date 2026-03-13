@@ -193,7 +193,7 @@ export function loadChatWith(peerNpub: string): ChatMessage[] {
 // ── Agent Context (PRIVATE — never transmitted over the network) ──
 
 export function loadAgentContext(): AgentContext {
-  return readJson<AgentContext>(AGENT_CONTEXT_FILE, { memories: [], updatedAt: 0 });
+  return readJson<AgentContext>(AGENT_CONTEXT_FILE, { memories: [], memorySummary: '', updatedAt: 0 });
 }
 
 export function addAgentMemory(entry: AgentMemoryEntry): void {
@@ -204,6 +204,13 @@ export function addAgentMemory(entry: AgentMemoryEntry): void {
   writeJson(AGENT_CONTEXT_FILE, ctx);
 }
 
+export function saveMemorySummary(summary: string): void {
+  const ctx = loadAgentContext();
+  ctx.memorySummary = summary;
+  ctx.updatedAt = Date.now();
+  writeJson(AGENT_CONTEXT_FILE, ctx);
+}
+
 export function clearAgentContext(): void {
-  writeJson(AGENT_CONTEXT_FILE, { memories: [], updatedAt: 0 });
+  writeJson(AGENT_CONTEXT_FILE, { memories: [], memorySummary: '', updatedAt: 0 });
 }

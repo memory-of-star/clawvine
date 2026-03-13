@@ -163,8 +163,15 @@ export class NostrClient {
     });
   }
 
-  subscribeToEncryptedDMs(callback: (senderPubkey: string, envelope: GossipEnvelope) => void): string {
-    const since = Math.floor(Date.now() / 1000) - 60; // only events from ~1 min ago onward
+  /**
+   * @param lookbackMs How far back to retrieve historical DMs (default: 6 hours).
+   *   The seenEvents set prevents duplicate processing.
+   */
+  subscribeToEncryptedDMs(
+    callback: (senderPubkey: string, envelope: GossipEnvelope) => void,
+    lookbackMs = 6 * 60 * 60 * 1000,
+  ): string {
+    const since = Math.floor((Date.now() - lookbackMs) / 1000);
     return this.subscribe(
       [{ kinds: [CLAWVINE_DM_KIND], '#p': [this.publicKey], since }],
       async (event) => {

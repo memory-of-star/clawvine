@@ -48,9 +48,9 @@ program
   .option('--list', 'List all available interest categories')
   .option('--prompt <summary>', 'Generate LLM prompt to extract profile from chat summary')
   .option('--intro <text>', 'Set a self-introduction (shared with mutual matches only)')
-  .option('--memory <text>', 'Add private agent memory (NEVER shared, only improves matching)')
-  .option('--memory-source <source>', 'Source label for the memory entry (default: agent-observation)')
-  .option('--rebuild-vector', 'Rebuild matching vector from tags + agent context')
+  .option('--memory <text>', 'Record conversation text (NEVER shared, stored locally)')
+  .option('--memory-summary <text>', 'Update the ≤256-token memory summary (triggers vector rebuild)')
+  .option('--rebuild-vector', 'Rebuild matching vector (768-dim: profile + memory summary)')
   .action(profileCommand);
 
 program

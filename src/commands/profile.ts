@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import { isInitialized, addAgentMemory, loadAgentContext } from '../core/config.js';
+import { isInitialized, addAgentMemory, loadAgentContext, saveMemorySummary } from '../core/config.js';
 import {
   getProfile,
   updateProfile,
@@ -9,29 +9,30 @@ import {
   generateProfileExtractionPrompt,
 } from '../core/profile.js';
 
-export function profileCommand(options: {
+export async function profileCommand(options: {
   tags?: string;
   list?: boolean;
   prompt?: string;
   intro?: string;
   memory?: string;
-  memorySource?: string;
+  memorySummary?: string;
   rebuildVector?: boolean;
-}): void {
+}): Promise<void> {
   if (!isInitialized()) {
     console.log(chalk.red('ClawVine is not initialized. Run: clawvine init'));
     return;
   }
 
   if (options.list) {
-    console.log(chalk.bold('\n🌿 Available Interest Categories\n'));
+    console.log(chalk.bold('\n🌿 Suggested Interest Tags\n'));
+    console.log(chalk.dim('  You can use any free-text tags — these are just suggestions.\n'));
     const groups: Record<string, string[]> = {
-      'Tech (0-19)': INTEREST_CATEGORIES.slice(0, 20),
-      'Creative (20-39)': INTEREST_CATEGORIES.slice(20, 40),
-      'Business (40-59)': INTEREST_CATEGORIES.slice(40, 60),
-      'Science (60-79)': INTEREST_CATEGORIES.slice(60, 80),
-      'Lifestyle (80-99)': INTEREST_CATEGORIES.slice(80, 100),
-      'Seeking / Social (100-127)': INTEREST_CATEGORIES.slice(100, 128),
+      'Tech': INTEREST_CATEGORIES.slice(0, 20),
+      'Creative': INTEREST_CATEGORIES.slice(20, 40),
+      'Business': INTEREST_CATEGORIES.slice(40, 60),
+      'Science': INTEREST_CATEGORIES.slice(60, 80),
+      'Lifestyle': INTEREST_CATEGORIES.slice(80, 100),
+      'Seeking / Social': INTEREST_CATEGORIES.slice(100, 128),
     };
 
     for (const [group, cats] of Object.entries(groups)) {
@@ -68,47 +69,47 @@ export function profileCommand(options: {
     return;
   }
 
-  // Agent submits private memory — stored locally, NEVER transmitted
+  // Agent submits raw conversation text — stored locally, NEVER transmitted
   if (options.memory) {
-    const source = options.memorySource || 'agent-observation';
     addAgentMemory({
-      source,
       content: options.memory,
       addedAt: Date.now(),
     });
-    rebuildVector();
     const ctx = loadAgentContext();
-    console.log(chalk.green(`\n✓ Agent memory added (${ctx.memories.length} total entries)`));
-    console.log(chalk.dim('  This data is stored locally and NEVER shared with anyone.'));
-    console.log(chalk.dim('  It only improves matching accuracy via the encrypted vector.'));
+    console.log(chalk.green(`✓ Memory recorded (${ctx.memories.length} total entries)`));
+    console.log(chalk.dim('  Submit --memory-summary to update the matching vector.'));
     return;
   }
 
-  // Rebuild vector from tags + agent context
+  // Agent submits a ≤256-token summary of all memories → triggers vector rebuild
+  if (options.memorySummary) {
+    saveMemorySummary(options.memorySummary);
+    console.log(chalk.dim('Rebuilding matching vector...'));
+    await rebuildVector();
+    console.log(chalk.green('✓ Memory summary saved & matching vector rebuilt (768-dim)'));
+    return;
+  }
+
   if (options.rebuildVector) {
-    rebuildVector();
-    console.log(chalk.green('\n✓ Matching vector rebuilt from tags + agent context'));
+    console.log(chalk.dim('Rebuilding matching vector...'));
+    await rebuildVector();
+    console.log(chalk.green('✓ Matching vector rebuilt (768-dim)'));
     return;
   }
 
   if (options.tags) {
-    const tags = options.tags.split(',').map((t) => t.trim());
-    const invalid = tags.filter((t) => !INTEREST_CATEGORIES.includes(t));
-    if (invalid.length > 0) {
-      console.log(chalk.yellow(`Unknown categories: ${invalid.join(', ')}`));
-      console.log('Run ' + chalk.cyan('clawvine profile --list') + ' to see available categories.');
-    }
-    const validTags = tags.filter((t) => INTEREST_CATEGORIES.includes(t));
-    if (validTags.length === 0) {
-      console.log(chalk.red('No valid tags provided.'));
+    const tags = options.tags.split(',').map((t) => t.trim()).filter(Boolean);
+    if (tags.length === 0) {
+      console.log(chalk.red('No tags provided.'));
       return;
     }
 
-    const profile = buildProfileFromTags(validTags);
+    const profile = buildProfileFromTags(tags);
     updateProfile(profile);
-    rebuildVector();
-    console.log(chalk.green(`\n✓ Profile updated with ${validTags.length} interest tags`));
-    console.log(`  Tags: ${validTags.join(', ')}`);
+    console.log(chalk.dim('Rebuilding matching vector...'));
+    await rebuildVector();
+    console.log(chalk.green(`\n✓ Profile updated with ${tags.length} interest tags`));
+    console.log(`  Tags: ${tags.join(', ')}`);
     return;
   }
 
@@ -133,20 +134,14 @@ export function profileCommand(options: {
 
   const ctx = loadAgentContext();
   if (ctx.memories.length > 0) {
-    console.log(chalk.dim(`  Agent context: ${ctx.memories.length} memory entries (private, never shared)`));
+    console.log(chalk.dim(`  Agent memory: ${ctx.memories.length} entries (private, never shared)`));
   }
 
-  const active = profile.vector
-    .map((v, i) => ({ category: INTEREST_CATEGORIES[i] ?? `dim_${i}`, weight: v }))
-    .filter((x) => x.weight !== 0)
-    .sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight));
-
-  if (active.length > 0) {
-    console.log(chalk.bold('\n  Active Dimensions:'));
-    for (const { category, weight } of active) {
-      const bar = weight > 0 ? chalk.green('█'.repeat(Math.round(weight * 10))) : chalk.red('█'.repeat(Math.round(-weight * 10)));
-      console.log(`    ${category.padEnd(28)} ${bar} ${weight.toFixed(1)}`);
-    }
+  const nonZero = profile.vector.filter((v) => v !== 0).length;
+  if (nonZero > 0) {
+    console.log(chalk.dim(`  Embedding: ${profile.vector.length}-dim vector (${nonZero} non-zero dims)`));
+  } else {
+    console.log(chalk.yellow(`  Embedding: not yet generated — run: clawvine profile --rebuild-vector`));
   }
   console.log('');
 }

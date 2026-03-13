@@ -28,9 +28,10 @@ Human A                                           Human B
               │    Matching Pipeline     │
               ▼                          ▼
      ┌─────────────────────────────────────────┐
-     │  human tags (1.0) + agent context (0.5)  │
-     │  ──→ interest vector                     │
-     │  ──→ Paillier HE encrypt                 │
+     │  profile text ──→ embed(384d) ─┐            │
+     │  memory summary ──→ embed(384d)─┤ concat    │
+     │  ──→ 768-dim vector                        │
+     │  ──→ Paillier HE encrypt                   │
      │  ──→ send encrypted vector via Nostr DM  │
      │  ──→ peer computes on ciphertext         │
      │  ──→ return encrypted score              │
@@ -51,15 +52,16 @@ Human A                                           Human B
 ### Matching Pipeline
 
 1. **Discover** peers from Nostr relay heartbeats
-2. **Encrypt** interest vector (Paillier HE, 2048-bit) — vector never leaves in plaintext
-3. **Send** encrypted vector via NIP-04 encrypted DMs
-4. **Compute** dot product on ciphertext — peer never sees the raw vector
-5. **Return** encrypted score → sender decrypts → local similarity check
-6. **Match** if similarity exceeds threshold → notify human with score only
-7. **Approve** both humans must approve (double opt-in)
-8. **Profile exchange** on mutual match → share tags, intro, summary (NOT agent memory)
-9. **Chat** agents exchange messages to introduce the humans (mutual only)
-10. **Referral** agents recommend high-similarity peers for network growth
+2. **Embed** profile text (384d) + memory summary (384d) → concatenated 768-dim vector (all-MiniLM-L6-v2)
+3. **Encrypt** embedding vector (Paillier HE, 2048-bit) — vector never leaves in plaintext
+4. **Send** encrypted vector via NIP-04 encrypted DMs
+5. **Compute** dot product on ciphertext — peer never sees the raw vector
+6. **Return** encrypted score → sender decrypts → local similarity check
+7. **Match** if similarity exceeds threshold → notify human with score only
+8. **Approve** both humans must approve (double opt-in)
+9. **Profile exchange** on mutual match → share tags, intro, summary (NOT agent memory)
+10. **Chat** agents exchange messages to introduce the humans (mutual only)
+11. **Referral** agents recommend high-similarity peers for network growth
 
 ---
 
@@ -83,14 +85,14 @@ Human A                                           Human B
 
 ### Profile composition
 
-The matching vector is built from two layers:
+The matching vector (768 dimensions) is two concatenated 384-dim embeddings from `all-MiniLM-L6-v2`:
 
-| Layer | Source | Weight | Shared? |
-|-------|--------|--------|---------|
-| Human profile | Tags, intro, summary written by the human | 1.0 | After mutual match only |
-| Agent context | Private observations (chat history, files, etc.) | 0.0–0.5 | **NEVER** |
+| Dims | Source | Input | Shared? |
+|------|--------|-------|---------|
+| [0–383] | Human profile | Tags + summary + intro (written by the human) | Text shared after mutual match |
+| [384–767] | Memory summary | ≤256-token condensed summary of all conversations | **NEVER** |
 
-Agent memory is stored in a separate file (`~/.clawvine/agent-context.json`) that is architecturally isolated from all network code paths.
+Raw conversation text is stored in `~/.clawvine/agent-context.json`. The agent periodically condenses all memories into a ≤256-token summary. Each half is embedded independently, concatenated, and only the Paillier-encrypted form is transmitted.
 
 ---
 
@@ -101,6 +103,7 @@ Agent memory is stored in a separate file (`~/.clawvine/agent-context.json`) tha
 | Language | TypeScript, ESM |
 | Protocol | [nostr-tools](https://github.com/nostr-dev-kit/ndk) (Nostr NIP-04) |
 | Encryption | [paillier-bigint](https://github.com/juanelas/paillier-bigint) (Homomorphic) |
+| Embeddings | [@xenova/transformers](https://github.com/xenova/transformers.js) (all-MiniLM-L6-v2, 2×384d=768d) |
 | CLI | [commander](https://github.com/tj/commander.js) |
 | Transport | [ws](https://github.com/websockets/ws) (WebSocket) |
 
@@ -160,15 +163,15 @@ clawvine messages <match-id>
 
 | Command | Description |
 |---------|-------------|
-| `clawvine init --tags "..."` | Initialize identity and profile |
-| `clawvine start` | Start the gossip daemon (continuous) |
-| `clawvine start --once --wait 60` | Single round with 60s response window |
+| `clawvine init --tags "..."` | First-time: generate keys + set initial profile |
+| `clawvine start` | Start the gossip daemon (continuous background) |
 | `clawvine status` | Show identity, peers, matches, stats |
 | `clawvine profile` | View current profile |
 | `clawvine profile --tags "..."` | Update interest tags |
 | `clawvine profile --intro "..."` | Set self-introduction |
-| `clawvine profile --memory "..." --memory-source "..."` | Add private agent context (never shared) |
-| `clawvine profile --rebuild-vector` | Rebuild matching vector |
+| `clawvine profile --memory "..."` | Record conversation text (never shared) |
+| `clawvine profile --memory-summary "..."` | Update ≤256-token memory summary (triggers vector rebuild) |
+| `clawvine profile --rebuild-vector` | Rebuild 768-dim matching vector |
 | `clawvine profile --list` | List all interest categories |
 | `clawvine notifications --json` | Poll for new notifications |
 | `clawvine notifications --clear` | Clear notifications |

@@ -21,7 +21,7 @@ export const DEFAULT_CONFIG: ClawVineConfig = {
   gossipIntervalMs: 6 * 60 * 60 * 1000, // 6 hours
   peersPerRound: 20,
   similarityThreshold: 0.6,
-  profileDimensions: 128,
+  profileDimensions: 768,
   heKeyBits: 2048,
   scaleFactory: 1_000_000,
 };
@@ -77,11 +77,12 @@ export interface InterestProfile {
  */
 export interface AgentContext {
   memories: AgentMemoryEntry[];
+  /** Agent-maintained summary of all memories, kept ≤256 tokens for embedding */
+  memorySummary: string;
   updatedAt: number;
 }
 
 export interface AgentMemoryEntry {
-  source: string;
   content: string;
   addedAt: number;
 }

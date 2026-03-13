@@ -136,10 +136,13 @@ export class GossipEngine {
       } catch { /* ignore */ }
     });
 
-    // Listen for incoming gossip DMs
-    this.client.subscribeToEncryptedDMs((senderPubkey, envelope) => {
-      this.handleGossipMessage(senderPubkey, envelope);
-    });
+    // Listen for incoming gossip DMs — look back one full gossip interval
+    this.client.subscribeToEncryptedDMs(
+      (senderPubkey, envelope) => {
+        this.handleGossipMessage(senderPubkey, envelope);
+      },
+      this.config.gossipIntervalMs,
+    );
   }
 
   private registerPeer(pubkey: string): void {
