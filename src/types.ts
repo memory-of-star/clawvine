@@ -14,9 +14,7 @@ export interface ClawVineConfig {
 export const DEFAULT_CONFIG: ClawVineConfig = {
   version: '0.0.0',
   relays: [
-    'wss://relay.clawvine.net',
-    'wss://relay2.clawvine.net',
-    'wss://nos.lol',
+    'ws://47.94.77.187:7777',
   ],
   gossipIntervalMs: 6 * 60 * 60 * 1000, // 6 hours
   peersPerRound: 20,
